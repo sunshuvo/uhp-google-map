@@ -8,38 +8,45 @@
 	$dbtable2="user";
 	$connect=mysql_conn();
 	*/
-//UHP API Call//
-function uhpapi($section,$action, $id){
-	$data= array("object"=>"$section", "action"=>"$action", "id"=>$id);
-	$postdata = json_encode($data);
-	$url="http://192.168.168.162/jsonapi/?token=3RzM2jnm7s32wKOtXm9pLGQhdLhCxwkpaWx9tQMvjjfIWhzkNf2u94U9ZKig2h0K";
-	$crl = curl_init($url);
-	curl_setopt($crl, CURLOPT_POST, 1);
-	curl_setopt($crl, CURLOPT_POSTFIELDS, $postdata);
-	curl_setopt($crl, CURLOPT_HTTPHEADER, array('Content-Type: application/json'));
-	curl_setopt($crl, CURLOPT_RETURNTRANSFER, 1);
-	$result = curl_exec($crl);
-	return($result);
-}
-//UHP API Call//
+	//require("snmp.php");
+	require("function.php");
+	$page = $_SERVER['PHP_SELF'];
+	$sec = "60";
+
 
 //Remtoe State List Generate
-$remote_state_list_decode=json_decode(uhpapi("remotestate","list",""), true);
-$state_list=$remote_state_list_decode["data"];
+	function loading(){
+		$remote_state_list_decode=json_decode(uhpapi("remotestate","list",""), true);
+		$state_list=$remote_state_list_decode["data"];
 
-foreach($state_list as $state_list) {
-	$remote_id = $state_list["remote_id"];
-	$core_state = $state_list["core_state"];
+		$children = array();
+		$file = uniqid().".txt";
+
+		foreach($state_list as $state_list) {
+			$remote_id = $state_list["remote_id"];
+			$core_state = $state_list["core_state"];
+			usleep(300000);
+			$pid = pcntl_fork();
+			if ($pid === -1) {}
+			else if ($pid === 0) {
+				shell_exec("php multi.php '".escapeshellarg($remote_id)."' '".escapeshellarg($core_state)."' '".escapeshellarg($file)."'");
+				posix_kill(getmypid(), SIGKILL);
+			}
+			else {
+				$children[] = $pid;
+			}
+		}
+		foreach ($children as $pid) {
+			pcntl_waitpid($pid, $status);
+		}
+		$station_status = file_get_contents("/var/www/html/tmp/".$file."");
+		$station_status = "[".rtrim($station_status, ",")."]";
+		$station_status = json_decode( $station_status, true );
+		shell_exec("rm -f /var/www/html/tmp/".$file."");
+		
+		return $station_status;
+	}
 	
-	$station_info_decode=json_decode(uhpapi("station","select",$remote_id), true);
-	$station_info=$station_info_decode["data"];
-	
-	$station_name = $station_info["name"];
-	$station_lat = $station_info["latitude"];
-	$station_lon = $station_info["longitude"];
-	
-	$station_status[] = array("remote_id"=>$remote_id, "core_state"=>$core_state, "station_name"=>$station_name, "station_lat"=>$station_lat, "station_lon"=>$station_lon);
-}
 //Remtoe State List Generate
 ?>
 
@@ -49,6 +56,7 @@ foreach($state_list as $state_list) {
 <html>
 <head>
 <meta charset="utf-8">
+<meta http-equiv="refresh" content="<?php echo $sec?>;URL='<?php echo $page?>'">
 <title>UHP VSAT MAP</title>
 <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.0.0-beta3/dist/css/bootstrap.min.css" rel="stylesheet" integrity="sha384-eOJMYsd53ii+scO/bJGFsiCZc+5NDVN2yr8+0RDqr0Ql0h+rP48ckxlpbzKgwra6" crossorigin="anonymous">
 <link rel="stylesheet" href="css/style.css">
@@ -84,16 +92,18 @@ foreach($state_list as $state_list) {
     <script type="text/javascript">
     var locations = [
 		<?php
+			$station_status = loading();
+			
 			$j = 0;
 			$lat=0;
 			$lon=0;
 			foreach($station_status as $i => $item){
-				if($item["core_state"]==7){ $icon = "img/marker/dot_green.svg"; }
+				if($item["core_state"]==7){ if($item["station_tx"]>50 or $item["station_rx"]>50){$icon = "img/marker/dot_glow.gif";} else{$icon = "img/marker/dot_green.svg"; }}
 				if($item["core_state"]==5){ $icon = "img/marker/dot_red.svg"; }
 				if($item["core_state"]==1){ $icon = "img/marker/dot_blue.svg"; }
 				
 				if($item["station_lat"]>0 and $item["station_lon"]>0){
-					echo "[".$item["remote_id"].", '".$item["station_name"]."', ".$i.", '".$icon."', ".$item["station_lat"].", ".$item["station_lon"].", 'http://192.168.168.162/#/remote_dashboard/".$item["remote_id"]."/'],";
+					echo "[".$item["remote_id"].", '".$item["station_name"]."', ".$i.", '".$icon."', ".$item["station_lat"].", ".$item["station_lon"].", ".$item["station_rx"].", ".$item["station_tx"].", 'http://192.168.168.162/#/remote_dashboard/".$item["remote_id"]."/'],";
 					$lat = $lat + $item["station_lat"];
 					$lon = $lon + $item["station_lon"];
 					$j++;
